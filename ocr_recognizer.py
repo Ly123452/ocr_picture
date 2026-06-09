@@ -28,8 +28,12 @@ class OCRBossRecognizer:
         """初始化OCR引擎"""
         try:
             from rapidocr_onnxruntime import RapidOCR
-            self.ocr = RapidOCR()
-            print("[INFO] RapidOCR 初始化成功")
+            # 【关键修改】：启用高精度模型
+            self.ocr = RapidOCR(
+                det_model_name='ch_PP-OCRv4_det', 
+                rec_model_name='ch_PP-OCRv4_rec'
+            )
+            print("[INFO] RapidOCR (V4 High Precision) 初始化成功")
         except Exception as e:
             print(f"[WARN] OCR初始化失败: {e}")
             self.ocr = None
@@ -40,23 +44,26 @@ class OCRBossRecognizer:
             return "[OCR未初始化]"
         
         try:
-            # 转换为PIL Image
-            if len(img.shape) == 3:
-                img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            else:
-                img_rgb = img
+            if img.size == 0 or img.shape[0] < 5 or img.shape[1] < 5:
+                return ""
+
+            # 确保图像是 3 通道的
+            if len(img.shape) == 2:
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
             
-            pil_img = Image.fromarray(img_rgb)
-            
-            # OCR识别
-            result, elapse = self.ocr(pil_img)
+            # 调用 OCR
+            result, elapse = self.ocr(img)
             
             if result:
-                texts = [item[1] for item in result]
-                return ' '.join(texts)
+                # result 结构: [ [box, text, score], ... ]
+                # 提取所有文本并用空格连接
+                texts = [item[1] for item in result if item[1]]
+                return ' '.join(texts) 
             else:
                 return ""
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"[识别失败: {str(e)}]"
 
     def detect_unread_markers(self, img: np.ndarray) -> list:
@@ -89,78 +96,82 @@ class OCRBossRecognizer:
         return cards
 
     def detect_chat_messages(self, chat_area: np.ndarray) -> list:
-        """检测聊天消息"""
+        """
+        检测聊天消息区域
+        改进：
+        1. 使用形态学操作合并同一气泡内的多行文字。
+        2. 增加内容密度过滤，去除空白噪点气泡。
+        3. 增加宽度和位置过滤，避免误检上方信息栏。
+        """
         h, w = chat_area.shape[:2]
+        if h == 0 or w == 0:
+            return []
+
         gray = cv2.cvtColor(chat_area, cv2.COLOR_BGR2GRAY)
-        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-        sobel_y = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
-        sobel_y = np.absolute(sobel_y)
-        sobel_y = np.uint8(255 * sobel_y / np.max(sobel_y))
-        _, binary = cv2.threshold(sobel_y, 30, 255, cv2.THRESH_BINARY)
         
-        horizontal_lines = []
-        for y in range(h):
-            row_sum = np.sum(binary[y, :])
-            if row_sum > w * 100:
-                horizontal_lines.append(y)
+        # 1. 二值化：提取深色文字
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        merged_lines = []
-        if horizontal_lines:
-            current_line = horizontal_lines[0]
-            for line in horizontal_lines[1:]:
-                if line - current_line > 5:
-                    merged_lines.append(current_line)
-                    current_line = line
-            merged_lines.append(current_line)
+        # 2. 形态学膨胀：连接垂直方向上相邻的文字行
+        # 核宽度15：连接左右字符
+        # 核高度7：连接上下行（比之前稍小，减少误连）
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 7)) 
+        dilated = cv2.dilate(binary, kernel, iterations=1)
+        
+        # 3. 寻找轮廓
+        contours, hierarchy = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
         messages = []
-        if len(merged_lines) >= 2:
-            for i in range(len(merged_lines) - 1):
-                y1 = merged_lines[i]
-                y2 = merged_lines[i + 1]
-                height = y2 - y1
-                if 20 < height < 150:
-                    region = chat_area[y1:y2, :]
-                    region_gray = cv2.cvtColor(region, cv2.COLOR_BGR2GRAY)
-                    left_avg = np.mean(region_gray[:, :int(w * 0.4)])
-                    right_avg = np.mean(region_gray[:, int(w * 0.6):])
-                    is_my = right_avg > left_avg + 10
-                    
-                    _, region_thresh = cv2.threshold(region_gray, 240, 255, cv2.THRESH_BINARY_INV)
-                    cols = np.sum(region_thresh, axis=0)
-                    x_coords = np.where(cols > 0)[0]
-                    
-                    if len(x_coords) > 0:
-                        x_start = max(0, x_coords[0] - 10)
-                        x_end = min(w - 1, x_coords[-1] + 10)
-                        width = x_end - x_start
-                        
-                        messages.append({
-                            'x': x_start, 'y': y1,
-                            'w': width, 'h': height,
-                            'is_my': is_my
-                        })
         
-        if not messages:
-            row_height = 30
-            for y in range(0, h - row_height, row_height):
-                row = chat_area[y:y + row_height, :]
-                row_gray = cv2.cvtColor(row, cv2.COLOR_BGR2GRAY)
-                avg_brightness = np.mean(row_gray)
-                if 50 < avg_brightness < 245:
-                    _, row_thresh = cv2.threshold(row_gray, 200, 255, cv2.THRESH_BINARY_INV)
-                    cols = np.sum(row_thresh, axis=0)
-                    x_coords = np.where(cols > 0)[0]
-                    if len(x_coords) > 10:
-                        x_start = x_coords[0]
-                        x_end = x_coords[-1]
-                        width = x_end - x_start + 1
-                        is_my = x_start > w * 0.5
-                        messages.append({
-                            'x': x_start, 'y': y,
-                            'w': width, 'h': row_height,
-                            'is_my': is_my
-                        })
+        for cnt in contours:
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            
+            # 过滤噪点：太小或太高的区域
+            if cw < 15 or ch < 10 or ch > 300:
+                continue
+            
+            # 【关键过滤】：检查原始二值图中该区域的内容密度
+            roi_binary = binary[y:y+ch, x:x+cw]
+            content_pixels = np.count_nonzero(roi_binary)
+            total_pixels = cw * ch
+            
+            # 如果内容占比小于 5%，视为空白气泡
+            if total_pixels > 0 and (content_pixels / total_pixels) < 0.05:
+                continue
+                
+            # 【新增过滤】：宽度不能太宽，避免包含整个“沟通职位”条目
+            # 通常消息气泡宽度不会超过屏幕的一半
+            if cw > w * 0.8:
+                continue
+                
+            # 【新增过滤】：Y坐标不能太靠上，避开顶部的个人信息栏
+            # 假设个人信息栏高度约为 100px，我们从 Y=100 开始检测
+            if y < 100:
+                continue
+            
+            # 4. 判断是“我”发的还是“对方”发的
+            center_x = x + cw / 2
+            is_my = center_x > w * 0.5
+            
+            # 5. 增加 Padding，确保文字不被切断
+            padding_y = 5
+            padding_x = 5
+            
+            final_y = max(0, y - padding_y)
+            final_h = min(h - final_y, ch + 2 * padding_y)
+            final_x = max(0, x - padding_x)
+            final_w = min(w - final_x, cw + 2 * padding_x)
+            
+            messages.append({
+                'x': final_x,
+                'y': final_y,
+                'w': final_w,
+                'h': final_h,
+                'is_my': is_my
+            })
+        
+        # 6. 按 Y 轴排序，确保消息顺序正确
+        messages.sort(key=lambda m: m['y'])
         
         return messages
 
@@ -175,18 +186,63 @@ class OCRBossRecognizer:
         """提取中间聊天区域"""
         h, w = img.shape[:2]
         left_x = int(w * 0.45) if w > 500 else 420
-        top_y = 100
+        top_y = 100  # 【关键修改】：从 Y=100 开始，避开顶部的个人信息栏
         bottom_y = h - 120
         return img[top_y:bottom_y, left_x:w], left_x, top_y
 
     def extract_profile_info(self, img: np.ndarray) -> dict:
-        """提取顶部个人信息区域"""
+        """智能提取个人信息区域（基于OCR全区域扫描）"""
         h, w = img.shape[:2]
+        
+        # 1. 提取顶部区域（Y=0 到 Y=200，覆盖所有个人信息）
+        top_area = img[0:min(200, h), 0:w]
+        
+        # 2. 使用 OCR 扫描整个顶部区域
+        text_result = self.recognize_text(top_area)
+        
+        # 3. 按行分割并清理
+        lines = [line.strip() for line in text_result.split(' ') if line.strip()]
+        
+        # 4. 根据关键词和内容特征匹配
+        name = ""
+        position = ""
+        job_title = ""
+        expectation = ""
+        
+        # 遍历所有识别出的文本行
+        for i, line in enumerate(lines):
+            # 姓名识别：通常在最前面，可能包含"刚刚活跃"等状态
+            if not name and len(line) <= 10:
+                # 过滤掉纯数字或特殊字符
+                if any(c.isalpha() or '\u4e00' <= c <= '\u9fff' for c in line):
+                    # 如果包含"刚刚"、"活跃"等词，提取前面的部分作为姓名
+                    if "刚刚" in line or "活跃" in line or "在线" in line:
+                        parts = line.split("刚刚")[0].split("活跃")[0].split("在线")[0].strip()
+                        if parts and len(parts) <= 5:
+                            name = parts
+                    else:
+                        # 可能是纯姓名
+                        name = line
+            
+            # 职位/学历信息：包含年龄、学历等关键词
+            elif not position and ("岁" in line or "应届" in line or "高中" in line or "本科" in line or "大专" in line):
+                position = line
+            
+            # 沟通职位：通常较长，包含工作描述
+            elif not job_title and ("日结" in line or "前台" in line or "自拍馆" in line or "包吃住" in line):
+                job_title = line
+            
+            # 期望：包含地点、薪资等信息
+            elif not expectation and ("·" in line and ("K" in line or "k" in line)):
+                expectation = line
+        
         return {
-            'region': (int(w * 0.45), 20, int(w * 0.25), 80),
-            'name_region': (int(w * 0.45) + 60, 20, 140, 40),
-            'position_region': (int(w * 0.45) + 60, 60, 140, 25),
-            'avatar_region': (int(w * 0.45) + 10, 20, 50, 50)
+            'name': name,
+            'position': position,
+            'job_title': job_title,
+            'expectation': expectation,
+            'raw_text': text_result,  # 保留原始识别结果用于调试
+            'region': (0, 0, w, min(200, h))
         }
 
     def recognize(self, img_path: str):
@@ -245,17 +301,46 @@ class OCRBossRecognizer:
             "markers": [[int(panel_x + mx), int(my), int(mw), int(mh)] for mx, my, mw, mh in unread_markers]
         }
         
-        # 2. 识别聊天区域消息
+        # 2. 提取顶部个人信息区域
+        print("[INFO] 提取个人信息...")
+        profile_info = self.extract_profile_info(img)
+        
+        # 【关键修改】：直接使用智能检测的结果，不再使用硬编码坐标
+        result["profile"] = {
+            "name": profile_info['name'],
+            "position": profile_info['position'],
+            "job_title": profile_info['job_title'],
+            "expectation": profile_info['expectation'],
+            "region": profile_info['region']
+        }
+        
+        # 【调试信息】打印原始OCR识别结果
+        if profile_info.get('raw_text'):
+            print(f"[DEBUG] 个人信息区域原始OCR结果: {profile_info['raw_text']}")
+        
+        # 3. 识别聊天区域消息
         print("[INFO] 识别聊天区域消息...")
         chat_area, chat_x, chat_y = self.extract_chat_area(img)
         messages = self.detect_chat_messages(chat_area)
         
         adjusted_messages = []
         for i, msg in enumerate(messages):
+            # 确保坐标不越界
+            x1 = max(0, msg['x'])
+            y1 = max(0, msg['y'])
+            x2 = min(chat_area.shape[1], msg['x'] + msg['w'])
+            y2 = min(chat_area.shape[0], msg['y'] + msg['h'])
+            
+            # 截取完整的消息气泡区域
+            msg_img = chat_area[y1:y2, x1:x2]
+            
             # OCR识别消息内容
-            msg_img = chat_area[msg['y']:msg['y'] + msg['h'], msg['x']:msg['x'] + msg['w']]
             msg_text = self.recognize_text(msg_img)
             
+            # 【可选】如果识别结果为空，可以选择跳过不加入列表
+            if not msg_text.strip():
+                continue
+
             adjusted_messages.append({
                 "index": int(i),
                 "sender": "我" if msg['is_my'] else "对方",
@@ -269,27 +354,6 @@ class OCRBossRecognizer:
             "my_messages": int(sum(1 for m in adjusted_messages if m['is_my'])),
             "other_messages": int(sum(1 for m in adjusted_messages if not m['is_my'])),
             "messages": adjusted_messages
-        }
-        
-        # 3. 提取个人信息区域
-        print("[INFO] 提取个人信息...")
-        profile_info = self.extract_profile_info(img)
-        
-        # OCR识别姓名和职位
-        name_img = img[profile_info['name_region'][1]:profile_info['name_region'][1] + profile_info['name_region'][3],
-                       profile_info['name_region'][0]:profile_info['name_region'][0] + profile_info['name_region'][2]]
-        profile_name = self.recognize_text(name_img)
-        
-        position_img = img[profile_info['position_region'][1]:profile_info['position_region'][1] + profile_info['position_region'][3],
-                          profile_info['position_region'][0]:profile_info['position_region'][0] + profile_info['position_region'][2]]
-        profile_position = self.recognize_text(position_img)
-        
-        result["profile"] = {
-            "name": profile_name,
-            "position": profile_position,
-            "name_region": profile_info['name_region'],
-            "position_region": profile_info['position_region'],
-            "avatar_region": profile_info['avatar_region']
         }
         
         print(f"[INFO] 识别完成: {len(candidates)}个候选人, {len(adjusted_messages)}条消息")
@@ -340,7 +404,9 @@ def main():
     print("-" * 40)
     print(f"姓名: {result['profile']['name']}")
     print(f"职位: {result['profile']['position']}")
-    
+    print(f"沟通职位: {result['profile'].get('job_title', '')}")
+    print(f"期望: {result['profile'].get('expectation', '')}")
+
     print("\n【左侧候选人列表】")
     print("-" * 40)
     print(f"候选人总数: {result['left_panel']['total_candidates']}")
@@ -386,6 +452,8 @@ def main():
     txt_content.append("-" * 40)
     txt_content.append(f"姓名: {result['profile']['name']}")
     txt_content.append(f"职位: {result['profile']['position']}")
+    txt_content.append(f"沟通职位: {result['profile'].get('job_title', '')}")
+    txt_content.append(f"期望: {result['profile'].get('expectation', '')}")
     txt_content.append("")
     
     # 左侧列表
