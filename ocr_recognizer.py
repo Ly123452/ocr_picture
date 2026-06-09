@@ -383,7 +383,62 @@ def main():
     # 保存JSON结果
     with open("ocr_recognition_result.json", 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"[INFO] 结果已保存: ocr_recognition_result.json")
+    
+    # 生成详细报告
+    txt_content = []
+    txt_content.append("=" * 60)
+    txt_content.append("BOSS直聘信息识别完整报告（含OCR文字识别）")
+    txt_content.append("=" * 60)
+    txt_content.append(f"识别时间: {result['timestamp']}")
+    txt_content.append(f"截图文件: {img_path}")
+    txt_content.append(f"图片尺寸: {result['image_size']['width']} × {result['image_size']['height']}")
+    txt_content.append("")
+    
+    # 个人信息
+    txt_content.append("【一、个人信息】")
+    txt_content.append("-" * 40)
+    txt_content.append(f"姓名: {result['profile']['name']}")
+    txt_content.append(f"职位: {result['profile']['position']}")
+    txt_content.append(f"沟通职位: {result['profile'].get('job_title', '')}")
+    txt_content.append(f"期望: {result['profile'].get('expectation', '')}")
+    txt_content.append("")
+    
+    # 左侧列表
+    txt_content.append("【二、左侧候选人列表】")
+    txt_content.append("-" * 40)
+    txt_content.append(f"📊 候选人总数: {result['left_panel']['total_candidates']}")
+    txt_content.append(f"🔴 未读消息: {result['left_panel']['unread_count']}")
+    txt_content.append(f"⚪ 已读消息: {result['left_panel']['total_candidates'] - result['left_panel']['unread_count']}")
+    txt_content.append("")
+    txt_content.append("候选人详情:")
+    for c in result['left_panel']['candidates']:
+        status = "[未读]" if c['is_unread'] else "[已读]"
+        txt_content.append(f"  卡片#{c['index']}: {status}")
+        txt_content.append(f"    姓名: {c['name']}")
+        txt_content.append(f"    消息预览: {c['message_preview']}")
+    txt_content.append("")
+    
+    # 聊天区域
+    txt_content.append("【三、聊天区域消息】")
+    txt_content.append("-" * 40)
+    txt_content.append(f"📝 消息总数: {result['chat_area']['message_count']}")
+    txt_content.append(f"💬 我方消息: {result['chat_area']['my_messages']}")
+    txt_content.append(f"👤 对方消息: {result['chat_area']['other_messages']}")
+    txt_content.append("")
+    txt_content.append("消息详情:")
+    for i, msg in enumerate(result['chat_area']['messages'], 1):
+        sender = "我" if msg['is_my'] else "对方"
+        txt_content.append(f"  [{i}] {sender}: {msg['content']}")
+    txt_content.append("")
+    
+    txt_content.append("=" * 60)
+    txt_content.append("识别完成！")
+    txt_content.append("=" * 60)
+    
+    with open("boss_ocr_report.txt", 'w', encoding='utf-8') as f:
+        f.write('\n'.join(txt_content))
+    
+    print(f"[INFO] 结果已保存: ocr_recognition_result.json, boss_ocr_report.txt")
 
 
 if __name__ == "__main__":
