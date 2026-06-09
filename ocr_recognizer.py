@@ -365,27 +365,14 @@ def main():
     recognizer = OCRBossRecognizer()
     
     # 获取图片路径
-    print("\n" + "=" * 60)
-    print("BOSS直聘信息识别工具")
-    print("=" * 60)
-    print("\n请输入截图文件的完整路径")
-    print("提示：可以直接拖拽图片文件到命令行窗口")
-    print("（直接按回车使用默认路径: mmexport1781002649103.jpg）")
-    
-    img_path = input("\n图片路径: ").strip().strip('"').strip("'")
-    
-    # 如果用户直接按回车，使用默认路径
+    img_path = input("请输入截图路径(直接回车使用默认): ").strip().strip('"').strip("'")
     if not img_path:
         img_path = "mmexport1781002649103.jpg"
     
-    # 检查文件是否存在
     import os
     if not os.path.exists(img_path):
         print(f"[ERROR] 文件不存在: {img_path}")
-        print("请检查路径是否正确！")
         return
-    
-    print(f"\n[INFO] 正在识别图片: {img_path}")
     
     result = recognizer.recognize(img_path)
     
@@ -393,105 +380,10 @@ def main():
         print(f"[ERROR] {result['error']}")
         return
     
-    # 打印结果
-    print("\n" + "=" * 60)
-    print("BOSS直聘信息识别报告（含OCR文字识别）")
-    print("=" * 60)
-    print(f"识别时间: {result['timestamp']}")
-    print(f"图片尺寸: {result['image_size']['width']}x{result['image_size']['height']}")
-    
-    print("\n【个人信息】")
-    print("-" * 40)
-    print(f"姓名: {result['profile']['name']}")
-    print(f"职位: {result['profile']['position']}")
-    print(f"沟通职位: {result['profile'].get('job_title', '')}")
-    print(f"期望: {result['profile'].get('expectation', '')}")
-
-    print("\n【左侧候选人列表】")
-    print("-" * 40)
-    print(f"候选人总数: {result['left_panel']['total_candidates']}")
-    print(f"未读消息: {result['left_panel']['unread_count']}")
-    print(f"已读消息: {result['left_panel']['total_candidates'] - result['left_panel']['unread_count']}")
-    
-    print("\n【候选人详情】")
-    for c in result['left_panel']['candidates']:
-        status = "🔴 未读" if c['is_unread'] else "⚪ 已读"
-        print(f"  {status} 卡片#{c['index']}")
-        print(f"    姓名: {c['name']}")
-        print(f"    消息: {c['message_preview']}")
-    
-    print("\n【聊天区域消息】")
-    print("-" * 40)
-    print(f"消息总数: {result['chat_area']['message_count']}")
-    print(f"我方消息: {result['chat_area']['my_messages']}")
-    print(f"对方消息: {result['chat_area']['other_messages']}")
-    
-    print("\n【消息详情】")
-    for msg in result['chat_area']['messages']:
-        status = "💬" if msg['is_my'] else "👤"
-        print(f"  {status} {msg['sender']}: {msg['content']}")
-    
     # 保存JSON结果
-    json_file = "ocr_recognition_result.json"
-    with open(json_file, 'w', encoding='utf-8') as f:
+    with open("ocr_recognition_result.json", 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=2)
-    print(f"\n[INFO] JSON结果已保存: {json_file}")
-    
-    # 生成详细报告
-    txt_content = []
-    txt_content.append("=" * 60)
-    txt_content.append("BOSS直聘信息识别完整报告（含OCR文字识别）")
-    txt_content.append("=" * 60)
-    txt_content.append(f"识别时间: {result['timestamp']}")
-    txt_content.append(f"截图文件: {img_path}")
-    txt_content.append(f"图片尺寸: {result['image_size']['width']} × {result['image_size']['height']}")
-    txt_content.append("")
-    
-    # 个人信息
-    txt_content.append("【一、个人信息】")
-    txt_content.append("-" * 40)
-    txt_content.append(f"姓名: {result['profile']['name']}")
-    txt_content.append(f"职位: {result['profile']['position']}")
-    txt_content.append(f"沟通职位: {result['profile'].get('job_title', '')}")
-    txt_content.append(f"期望: {result['profile'].get('expectation', '')}")
-    txt_content.append("")
-    
-    # 左侧列表
-    txt_content.append("【二、左侧候选人列表】")
-    txt_content.append("-" * 40)
-    txt_content.append(f"📊 候选人总数: {result['left_panel']['total_candidates']}")
-    txt_content.append(f"🔴 未读消息: {result['left_panel']['unread_count']}")
-    txt_content.append(f"⚪ 已读消息: {result['left_panel']['total_candidates'] - result['left_panel']['unread_count']}")
-    txt_content.append("")
-    txt_content.append("候选人详情:")
-    for c in result['left_panel']['candidates']:
-        status = "[未读]" if c['is_unread'] else "[已读]"
-        txt_content.append(f"  卡片#{c['index']}: {status}")
-        txt_content.append(f"    姓名: {c['name']}")
-        txt_content.append(f"    消息预览: {c['message_preview']}")
-    txt_content.append("")
-    
-    # 聊天区域
-    txt_content.append("【三、聊天区域消息】")
-    txt_content.append("-" * 40)
-    txt_content.append(f"📝 消息总数: {result['chat_area']['message_count']}")
-    txt_content.append(f"💬 我方消息: {result['chat_area']['my_messages']}")
-    txt_content.append(f"👤 对方消息: {result['chat_area']['other_messages']}")
-    txt_content.append("")
-    txt_content.append("消息详情:")
-    for i, msg in enumerate(result['chat_area']['messages'], 1):
-        sender = "我" if msg['is_my'] else "对方"
-        txt_content.append(f"  [{i}] {sender}: {msg['content']}")
-    txt_content.append("")
-    
-    txt_content.append("=" * 60)
-    txt_content.append("识别完成！")
-    txt_content.append("=" * 60)
-    
-    txt_file = "boss_ocr_report.txt"
-    with open(txt_file, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(txt_content))
-    print(f"[INFO] 详细报告已保存: {txt_file}")
+    print(f"[INFO] 结果已保存: ocr_recognition_result.json")
 
 
 if __name__ == "__main__":
